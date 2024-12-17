@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter/services.dart';  // Import the services package
 
 void main() {
   runApp(MyApp());
@@ -12,23 +12,21 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Audio File Picker',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-      ),
-      home: AudioFilePicker(),
+      title: 'USB Drive Picker',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      home: UsbFilePicker(),
     );
   }
 }
 
-class AudioFilePicker extends StatefulWidget {
+class UsbFilePicker extends StatefulWidget {
   @override
-  _AudioFilePickerState createState() => _AudioFilePickerState();
+  _UsbFilePickerState createState() => _UsbFilePickerState();
 }
 
-class _AudioFilePickerState extends State<AudioFilePicker> {
-  List<FileSystemEntity> _audioFiles = [];
-  String _selectedDirectory = '/storage/AA40-DD04/RECORD'; // Default fixed directory path
+class _UsbFilePickerState extends State<UsbFilePicker> {
+  String? _selectedPath;
+  List<String> _audioFiles = [];
 
   @override
   void initState() {
@@ -37,92 +35,95 @@ class _AudioFilePickerState extends State<AudioFilePicker> {
   }
 
   Future<void> _requestPermissions() async {
-    final status = await Permission.manageExternalStorage.request();
-    if (status.isGranted) {
-      print('Manage External Storage permission granted');
-    } else {
-      print('Manage External Storage permission denied');
+    if (await Permission.storage.request().isDenied) {
+      print("Storage permission denied!");
+    }
+
+    if (Platform.isAndroid && await Permission.manageExternalStorage.isDenied) {
+      await Permission.manageExternalStorage.request();
     }
   }
 
   Future<void> _pickDirectory() async {
-    final directory = await FilePicker.platform.getDirectoryPath();
-    if (directory != null) {
-      setState(() {
-        print('::::::::::::::::::::::::::::::Directory: $_selectedDirectory');
-        _selectedDirectory = directory;
-      });
-    }
-  }
-
-  Future<void> _fetchAudioFiles() async {
-    final directory = Directory(_selectedDirectory);
-    if (directory.existsSync()) {
-      final files = directory.listSync();
-      print('Files in directory:');
-      for (var file in files) {
-        print('File: ${file.path}');  // Log the file path
+    try {
+      final result = await FilePicker.platform.getDirectoryPath();
+      if (result != null) {
+        print('Selected Path: $result');
+        setState(() {
+          _selectedPath = result;
+        });
+        _listAudioFiles(result);
+      } else {
+        print('No directory selected');
       }
-
-      final audioFiles = files.where((file) {
-        final extension = file.path.split('.').last.toLowerCase();
-        return ['mp3', 'wav', 'aac'].contains(extension);
-      }).toList();
-
-      print('Audio Files: ${audioFiles.length}');
-      setState(() {
-        _audioFiles = audioFiles;
-      });
-    } else {
-      print('Directory does not exist');
+    } catch (e) {
+      print("Error picking directory: $e");
     }
   }
 
-  // Function to copy the selected directory to clipboard
-  void _copyToClipboard() {
-    Clipboard.setData(ClipboardData(text: _selectedDirectory));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Directory path copied to clipboard!')),
-    );
+  void _listAudioFiles(String path) async {
+    try {
+      final directory = Directory(path);
+      if (directory.existsSync()) {
+        final files = directory.listSync(recursive: true, followLinks: false);
+        final audioFiles = files.where((file) {
+          final extension = file.path.split('.').last.toLowerCase();
+          return ['mp3', 'wav', 'aac'].contains(extension);
+        }).map((file) => file.path).toList();
+
+        setState(() {
+          _audioFiles = audioFiles;
+        });
+
+        print('Audio Files Found: ${audioFiles.length}');
+      } else {
+        print('Directory does not exist!');
+      }
+    } catch (e) {
+      print('Error listing files: $e');
+    }
+  }
+
+  void _copyPathToClipboard() {
+    if (_selectedPath != null) {
+      Clipboard.setData(ClipboardData(text: _selectedPath!));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Path copied to clipboard: $_selectedPath')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Directory Picker'),
-      ),
+      appBar: AppBar(title: Text('USB Drive Picker')),
       body: Column(
         children: [
           ElevatedButton(
             onPressed: _pickDirectory,
-            child: Text('Pick Directory'),
+            child: Text('Pick USB Drive Directory'),
           ),
-          SizedBox(height: 20),
-          // Display the selected directory
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Selected Directory: $_selectedDirectory',
-                    style: TextStyle(fontSize: 16),
-                    overflow: TextOverflow.ellipsis,
+          if (_selectedPath != null) ...[
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text('Selected Path: $_selectedPath',
+                        style: TextStyle(fontSize: 14), overflow: TextOverflow.ellipsis),
                   ),
-                ),
-                IconButton(
-                  icon: Icon(Icons.copy),
-                  onPressed: _copyToClipboard,  // Copy path to clipboard
-                ),
-              ],
+                  IconButton(
+                    icon: Icon(Icons.copy),
+                    onPressed: _copyPathToClipboard,
+                  ),
+                ],
+              ),
             ),
-          ),
-          // Button to fetch audio files from the selected directory
-          ElevatedButton(
-            onPressed: _fetchAudioFiles,
-            child: Text('Fetch Audio Files'),
-          ),
+            ElevatedButton(
+              onPressed: () => _listAudioFiles(_selectedPath!),
+              child: Text('Fetch Audio Files'),
+            ),
+          ],
           Expanded(
             child: _audioFiles.isEmpty
                 ? Center(child: Text('No audio files found.'))
@@ -130,7 +131,8 @@ class _AudioFilePickerState extends State<AudioFilePicker> {
               itemCount: _audioFiles.length,
               itemBuilder: (context, index) {
                 return ListTile(
-                  title: Text(_audioFiles[index].path.split('/').last),
+                  title: Text(_audioFiles[index].split('/').last),
+                  subtitle: Text(_audioFiles[index]),
                 );
               },
             ),
